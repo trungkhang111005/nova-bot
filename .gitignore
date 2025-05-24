@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+env/
+
+# C/C++ / Make
+build/
+*.o
+*.a
+*.so
+
+# IDEs/editors
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
+.env
