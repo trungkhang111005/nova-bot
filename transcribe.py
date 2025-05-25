@@ -13,21 +13,9 @@ def rms(chunk):
 	return np.sqrt(np.mean(chunk**2))
 
 
-def speak_with_gcp(deepseek_response, out_index: int):
+def speak_with_gcp(deepseek_response, out_index, client, voice, audio_config):
 	try:
-		client = texttospeech.TextToSpeechClient()
-
 		synthesis_input = texttospeech.SynthesisInput(text=deepseek_response)
-
-		voice = texttospeech.VoiceSelectionParams(
-			language_code="en-US",
-			name="en-US-standard-D",
-			ssml_gender=texttospeech.SsmlVoiceGender.MALE
-		)
-
-		audio_config = texttospeech.AudioConfig(
-			audio_encoding=texttospeech.AudioEncoding.LINEAR16, sample_rate_hertz=48000  # WAV (PCM)
-		)
 
 		response = client.synthesize_speech(
 			input=synthesis_input,
@@ -48,17 +36,19 @@ def speak_with_gcp(deepseek_response, out_index: int):
 		print("keyboard Interrupt during gcp speaking!")
 		sd.stop()
 
-def record_until_silence(in_index: int, sample_rate=48000, threshold=0.0008, silence_duration=2.0, max_duration=15, chunk_duration=0.1):
+def record_until_silence(in_index: int, sample_rate=48000, threshold=0.0015, silence_duration=2.0, max_duration=15, chunk_duration=0.1):
 	try:
 		q_buffer = queue.Queue()
 		silence_counter = 0
 		speaking_started = False
 		silence_start_time = None
+		loud_chunk_counter = 0
 		chunk_samples = int(sample_rate * chunk_duration)
 		max_chunks = int(max_duration / chunk_duration)
 		def callback(indata, frames, time_info, status):
 			if status:
 				print("Callback status:", status)
+			print(f"{rms(indata)}")
 			q_buffer.put(indata.copy())
 		print(f"Listening...")
 		buffer = []
@@ -68,6 +58,10 @@ def record_until_silence(in_index: int, sample_rate=48000, threshold=0.0008, sil
 				chunk = np.squeeze(chunk)
 
 				if rms(chunk) >= threshold:
+					loud_chunk_counter += 1
+				else:
+					loud_chunk_counter = 0
+				if loud_chunk_counter >= 2:
 					speaking_started = True
 					silence_start_time = None
 				elif speaking_started:
@@ -80,20 +74,18 @@ def record_until_silence(in_index: int, sample_rate=48000, threshold=0.0008, sil
 		audio = np.concatenate(buffer)
 		if audio.size == 0:
 			print("No audio captured.")
-			return
+			return np.array([])
 		return audio
 	except KeyboardInterrupt:
 		print("keyboard Interrupt during recording!")
 		return np.array([])
 
 
-def transcribe_audio_with_openai(audio_data: np.ndarray, sample_rate: int = 48000, api_key: str = "") -> str:
+def transcribe_audio_with_openai(audio_data: np.ndarray, client, sample_rate: int = 48000) -> str:
 	# Save audio to temporary WAV file (OpenAI STT requires a file upload)
 	with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
 		sf.write(tmpfile.name, audio_data, sample_rate)
 		tmpfile.flush()
-		# Create an OpenAI client
-		client = openai.OpenAI(api_key=api_key)
 		# Call OpenAI Whisper API (note: model is "whisper-1")
 		with open(tmpfile.name, "rb") as audio_file:
 			transcript = client.audio.transcriptions.create(
@@ -105,21 +97,24 @@ def transcribe_audio_with_openai(audio_data: np.ndarray, sample_rate: int = 4800
 	return transcript.text
 
 
-def listen_transcribe_respond(api_key_deepseek, api_key_gpt,in_index: int,out_index: int):
+def listen_transcribe_respond(gpt_client, deepseek_client, gcp_client, in_index ,out_index, voice, audio_config):
 	try:
 	# Record audio
 		audio = record_until_silence(in_index)
+		if audio is None or audio.size == 0:
+			print("No valid audio to process. Exiting.")
+			return
 		audio /= np.max(np.abs(audio) + 1e-9)  # normalize to [-1, 1]
 
 	# Whisper expects int16 or float32 in a numpy array
-		transcription = transcribe_audio_with_openai(audio, 48000, api_key_gpt)
+		transcription = transcribe_audio_with_openai(audio, gpt_client)
 		print(f"User: {transcription}")
 
 	# Send to DeepSeek (replace with actual API call)
-		deepseek_response = get_output(transcription, api_key_deepseek)
+		deepseek_response = get_output(transcription, deepseek_client)
 		print(f"AI: {deepseek_response}")
 
 	# Speak it aloud
-		speak_with_gcp(deepseek_response, out_index)
+		speak_with_gcp(deepseek_response, out_index, gcp_client, voice, audio_config)
 	except KeyboardInterrupt:
 		print("keyboard Interrupt during listen_transcribe_respond function!")

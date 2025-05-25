@@ -1,31 +1,36 @@
-from openai import OpenAI
+SYSTEM_PROMPT = """
+You are Nova-Bot’s brain.  
+• If the user gives a **robot command**, answer *only* with a JSON object in this schema and nothing else:
 
-def get_output(input, api_key):
-	prompt = f"""
-You are both a verbal teacher and a robot operator
+{
+  "type": "command",
+  "commands": [
+    {
+      "device": "<motor|camera|gripper|...>",
+      "action": "<speed|rotate|state|...>",
+      "value": <number|string>
+    }
+  ]
+}
 
-input: {input}
 
-If input is an actuated command:
-- Generate command (ex: speed 50; camera 1)
+The outer object must appear exactly once, with keys in the same order.
+Reply only with raw JSON, no markdown, no backticks, no explanation.
 
-If input is a knowledge-based question:
-- Give short answers
-- No need to explain for direct question (explain when asked "How" or "can you explain ... ?")
-- Answers are used in text to speech, include no symbols.
+• If the user asks a knowledge question, reply with a plain-text sentence ≤ 30 words, no bullet points, no parentheses, no symbols except basic punctuation
 """
 
-	client = OpenAI(
-		api_key=api_key,
-		base_url="https://api.deepseek.com/v1"
-	)
-
-	response = client.chat.completions.create(
-		model="deepseek-chat",  # or "deepseek-chat-v1.5"
-		messages=[
-			{"role": "user", "content": prompt}
-		],
-		temperature=0.7
-	)
-
-	return response.choices[0].message.content
+def get_output(user_input: str, client) -> str:
+	messages = [
+		{"role": "system", "content": SYSTEM_PROMPT},
+		# Optional “self-reminder” makes some models more obedient
+		{"role": "assistant", "content": "I will obey the above format strictly."},
+		{"role": "user", "content": user_input}
+	]
+	resp = client.chat.completions.create(
+		model="deepseek-chat",
+		messages=messages,
+		temperature=0.3,
+		top_p=1.0
+		)
+	return resp.choices[0].message.content

@@ -1,24 +1,13 @@
 import pvporcupine
+import pyaudio
 import struct
 import os
-import pyaudio
 import scipy.signal
 import numpy as np
-import subprocess, re, ctypes
 from google.cloud import texttospeech
 from openai import OpenAI
 from dotenv import load_dotenv
 from transcribe import listen_transcribe_respond
-
-def card_number(hint: str, capture=True) -> int:
-    """Return ALSA card # that matches `hint` (e.g. 'voicehat' or 'USB')."""
-    cmd = ['arecord', '-l'] if capture else ['aplay', '-l']
-    out = subprocess.check_output(cmd, text=True)
-    for line in out.splitlines():
-        if line.startswith('card') and hint.lower() in line.lower():
-            return int(re.search(r'card (\d+):', line).group(1))
-    raise RuntimeError(f"No ALSA card containing “{hint}” found")
-
 
 load_dotenv()
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "keys/voice-command-460016-646f1e7cb362.json"
@@ -26,11 +15,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 GPT_API_KEY= os.getenv("GPT_API_KEY")
 PICOVOICE_KEY = os.getenv("PICOVOICE_KEY")
 KEYWORD_PATH = "Hey_nova/Hey-Nova_en_raspberry-pi_v3_0_0.ppn"
-MIC = "sndrpigooglevoi"
-SPEAKER = "USB"
-in_index = card_number(MIC, True)
-out_index = card_number(SPEAKER, False)
-print(f"in: {in_index}, out: {out_index}")
+MIC = "snd_rpi_googlevoicehat_soundcar"
+SPEAKER = "CM477-30757"
 porcupine = pvporcupine.create(access_key = PICOVOICE_KEY, keyword_paths=[KEYWORD_PATH])
 deepseek_client = OpenAI(api_key = DEEPSEEK_API_KEY, base_url = "https://api.deepseek.com")
 gpt_client = OpenAI(api_key=GPT_API_KEY)
@@ -49,30 +35,33 @@ stream = pa.open(
 	channels			= 1,
 	rate				= 48000,	# 16 kHz for porcupine but I2S only has 48 KHz
 	input				= True,
-	input_device_index	= in_index, # force pa to use the below alsa
-	frames_per_buffer	= porcupine.frame_length * 3
+	input_device_index	= IN_INDEX,
+	frames_per_buffer	= porcupine.frame_length
 )
+
 print("Listening for wake word…  (Ctrl-C to exit)")
 try:
 	while True:
-		audio_data = stream.read(porcupine.frame_length * 3, exception_on_overflow=False)
+		audio_data		= stream.read(porcupine.frame_length, exception_on_overflow=False)
+		samples			= struct.unpack_from("h" * porcupine.frame_length, audio_data)
+		audio_data = stream.read(1440, exception_on_overflow=False)  # 48000 Hz / 100 fps = 480 samples/frame
 		samples_48k = np.frombuffer(audio_data, dtype=np.int16)
 
 		# Resample to 16000 Hz to match Porcupine
-		samples_16k = samples_48k.reshape(-1, 3).mean(axis=1).astype(np.int16)
+		samples_16k = scipy.signal.resample(samples_48k, porcupine.frame_length).astype(np.int16)
 
 		if porcupine.process(samples_16k) >= 0:
 			print("Wake word detected!")
 			# 🛑 Close PyAudio stream before switching to sounddevice
 			stream.stop_stream()
 			stream.close()
-			listen_transcribe_respond(gpt_client, deepseek_client, gcp_client, in_index, out_index, voice, audio_config)
+			listen_transcribe_respond(gpt_client, deepseek_client, gcp_client, MIC, SPEAKER, voice, audio_config)
 			stream = pa.open(
 				format				= pyaudio.paInt16,
 				channels			= 1,
 				rate				= 48000,	# 16 kHz for porcupine but I2S only has 48 KHz
 				input				= True,
-				input_device_index	= in_index,
+				input_device_index	= IN_INDEX,
 				frames_per_buffer	= porcupine.frame_length
 			)
 			print("Listening for wake word…")
@@ -81,3 +70,12 @@ except KeyboardInterrupt:
 finally:
 	stream.stop_stream();	stream.close()
 	pa.terminate();		porcupine.delete()
+def find_device_index(target_name: str, is_input: bool):
+	import pyaudio
+	p = pyaudio.PyAudio()
+	for i in range(p.get_device_count()):
+		info = p.get_device_info_by_index(i)
+		if target_name in info['name'] and ((is_input and info['maxInputChannels'] > 0) or (not is_input and info['maxOutputChannels'] > 0)):
+			return i
+	p.terminate()
+	raise ValueError(f"Device '{target_name}' not found.")

@@ -1,4 +1,3 @@
 import sounddevice as sd
 
-a = sd.query_devices()
-print(f"{a}")
+print(sd.query_devices())
