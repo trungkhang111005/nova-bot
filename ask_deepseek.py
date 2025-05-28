@@ -1,3 +1,10 @@
+import re
+
+def clean_response(response: str) -> str:
+	# Remove Markdown code fences if present
+	cleaned = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", response.strip())
+	return cleaned.strip()
+
 SYSTEM_PROMPT = """
 You are Nova-Bot’s brain.  
 • If the user gives a **robot command**, answer *only* with a JSON object in this schema and nothing else:
@@ -33,4 +40,4 @@ def get_output(user_input: str, client) -> str:
 		temperature=0.3,
 		top_p=1.0
 		)
-	return resp.choices[0].message.content
+	return clean_response(resp.choices[0].message.content)
