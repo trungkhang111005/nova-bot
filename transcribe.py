@@ -100,20 +100,23 @@ def transcribe_audio_with_openai(audio_data: np.ndarray, client, sample_rate: in
 	return transcript.text
 
 def handle_motor(action, value):
-	ser = serial.Serial('/dev/ttyAMA0', baudrate = 115200, timeout = 1)
+	ser = serial.Serial('/dev/ttyAMA0', baudrate = 9600, timeout = 1)
 	try:
-		speed = min(7 , max(value, 0))
+		speed = min(7 , max(abs(value), 0))
 		if value > 0: dir = 0
 		else: dir = 1
 		if action == "speed":
-			# send value to mcu 
+			# send value to mcu
 			m1 = dir << 3 | speed
 			m2 = dir << 3 | speed
 		elif action == "rotate":
 			m1 = dir << 3 | speed
 			m2 = (~dir & 1) | speed
 		data = (m1 << 4) | m2
+		print(hex(data))
 		ser.write(bytes([data]))
+		echo = ser.read(1)
+		print(echo)
 	except KeyboardInterrupt:
 		print("keyboard Interrupt during listen_transcribe_respond function!")
 def listen_transcribe_respond(gpt_client, deepseek_client, gcp_client, in_index ,out_index, voice, audio_config):
